@@ -7,9 +7,10 @@ sealed class RenderDecision {
 }
 
 interface AvSync {
-    fun scheduleRender(ptsUs: Long): RenderDecision
+    fun scheduleRender(ptsUs: Long): RenderDecision = scheduleRender(ptsUs, false)
+    fun scheduleRender(ptsUs: Long, isKeyframe: Boolean): RenderDecision = scheduleRender(ptsUs)
 }
 
 class NowAvSync : AvSync {
-    override fun scheduleRender(ptsUs: Long): RenderDecision = RenderDecision.Now
+    override fun scheduleRender(ptsUs: Long, isKeyframe: Boolean): RenderDecision = RenderDecision.Now
 }

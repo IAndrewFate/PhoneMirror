@@ -200,7 +200,7 @@ class VideoDecodePipeline(
                         sessionPolicy.onEvent(SessionEvent.KeyframeReceived)
                     }
 
-                    when (val decision = avSync.scheduleRender(output.ptsUs)) {
+                    when (val decision = avSync.scheduleRender(output.ptsUs, output.isKeyframe)) {
                         is RenderDecision.Now -> {
                             dec.releaseOutputBuffer(output.bufferIndex, true)
                             renderedFrameCount++
