@@ -170,7 +170,7 @@ class AvSyncEngine(
         val audioFrames = headPositionFramesProvider()
         val audioNowUs = firstAudioPtsUs!! + (audioFrames * 1_000_000L / sampleRate)
         val offset = syncOffsetUs ?: 0L
-        val jitterDelayUs = adaptiveJitterDelayUsProvider()
+        val jitterDelayUs = if (syncMode == SyncMode.AUDIO_MASTER) adaptiveJitterDelayUsProvider() else 0L
         val diff = (ptsUs - offset) - audioNowUs - jitterDelayUs
 
         updateDriftCompensator(diff)
@@ -270,7 +270,7 @@ class AvSyncEngine(
     }
 
     private fun publishStats() {
-        val jitterMs = adaptiveJitterDelayUsProvider() / 1000L
+        val jitterMs = if (syncMode == SyncMode.AUDIO_MASTER) (adaptiveJitterDelayUsProvider() / 1000L) else 0L
         _stats.value = AvSyncStats(
             droppedVideo = droppedVideoCount,
             renderedVideo = renderedVideoCount,

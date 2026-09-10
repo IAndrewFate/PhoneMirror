@@ -43,6 +43,7 @@ class VideoDecodePipeline(
     var avSync: AvSync = NowAvSync(),
     private val decoderFactory: VideoDecoderFactory = DefaultVideoDecoderFactory,
     var onRequestKeyframe: () -> Unit = {},
+    var onFrameArrival: () -> Unit = {},
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : VideoSink {
 
@@ -127,6 +128,7 @@ class VideoDecodePipeline(
     }
 
     override fun onFrame(ptsUs: Long, keyframe: Boolean, nal: ByteArray) {
+        onFrameArrival()
         synchronized(inputQueue) {
             if (awaitKeyframe) {
                 if (keyframe) {

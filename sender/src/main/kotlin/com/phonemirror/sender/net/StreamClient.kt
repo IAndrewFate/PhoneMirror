@@ -30,7 +30,7 @@ object DefaultSocketFactory : SocketFactory {
 
 class StreamClient(
     val sessionPolicy: SessionPolicy = SessionPolicy(Role.SENDER),
-    val overflowPolicy: OverflowPolicy = DropOldestAudioOverflowPolicy(),
+    val overflowPolicy: OverflowPolicy = RealOverflowPolicy(),
     val endpointStore: EndpointStore = InMemoryEndpointStore(),
     private val socketFactory: SocketFactory = DefaultSocketFactory,
     var configuredBitrateBps: Int = 8_000_000,
@@ -48,8 +48,19 @@ class StreamClient(
     private var clientJob: Job? = null
 
     // Send queue: bounded by bytes
-    private val sendChannel = Channel<Frame>(Channel.UNLIMITED)
+    val sendQueue = java.util.ArrayDeque<Frame>()
+    private val queueSignal = Channel<Unit>(Channel.CONFLATED)
     private val currentQueueBytes = AtomicLong(0)
+
+    init {
+        if (overflowPolicy is RealOverflowPolicy) {
+            overflowPolicy.onRequestKeyframe = { onRequestKeyframe() }
+            overflowPolicy.onBitrateChanged = { newBitrate ->
+                configuredBitrateBps = newBitrate
+                videoParams = videoParams.copy(bitrate = newBitrate)
+            }
+        }
+    }
 
     var backoffSchedule: List<Long> = listOf(1000L, 2000L, 4000L, 8000L, 8000L, 8000L, 8000L, 8000L, 8000L, 8000L)
 
@@ -69,20 +80,23 @@ class StreamClient(
         isRunning.set(false)
         clientJob?.cancel()
         clientJob = null
+        queueSignal.trySend(Unit)
+        synchronized(sendQueue) {
+            sendQueue.clear()
+            currentQueueBytes.set(0)
+        }
         _state.value = ClientState.Idle
     }
 
     fun sendFrame(frame: Frame): Boolean {
         val capacity = calculateCapacityBytes()
-        val current = currentQueueBytes.get()
-
-        if (!overflowPolicy.shouldAcceptFrame(frame, current, capacity)) {
-            overflowPolicy.onCongestion()
-            return false
+        val accepted = synchronized(sendQueue) {
+            overflowPolicy.handleEnqueue(frame, sendQueue, currentQueueBytes, capacity)
         }
-
-        currentQueueBytes.addAndGet(frame.body.size.toLong())
-        return sendChannel.trySend(frame).isSuccess
+        if (accepted) {
+            queueSignal.trySend(Unit)
+        }
+        return accepted
     }
 
     private suspend fun runClientLoop(host: String, port: Int, pin: String, tvName: String) {
@@ -193,15 +207,26 @@ class StreamClient(
     }
 
     private suspend fun drainSendQueue(outputStream: OutputStream, writer: FrameWriter) {
-        for (frame in sendChannel) {
-            val startMs = System.currentTimeMillis()
-            writer.writeFrame(frame)
-            currentQueueBytes.addAndGet(-frame.body.size.toLong())
+        while (isRunning.get()) {
+            val frame: Frame? = synchronized(sendQueue) {
+                if (sendQueue.isNotEmpty()) sendQueue.removeFirst() else null
+            }
+            if (frame != null) {
+                val startMs = System.currentTimeMillis()
+                writer.writeFrame(frame)
+                currentQueueBytes.addAndGet(-frame.body.size.toLong())
 
-            val writeDuration = System.currentTimeMillis() - startMs
-            if (writeDuration > 150) {
-                // Write stall past 150ms -> congestion signal
-                overflowPolicy.onCongestion()
+                val writeDuration = System.currentTimeMillis() - startMs
+                if (writeDuration > 150) {
+                    // Write stall past 150ms -> congestion signal
+                    overflowPolicy.onCongestion()
+                }
+            } else {
+                try {
+                    queueSignal.receive()
+                } catch (_: Exception) {
+                    break
+                }
             }
         }
     }

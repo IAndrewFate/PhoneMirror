@@ -21,6 +21,7 @@ class MirrorService : Service() {
 
     private var mediaProjection: MediaProjection? = null
     private val consentFlow = ConsentFlow()
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -99,6 +100,7 @@ class MirrorService : Service() {
 
         // STEP 6: Expose projection
         ProjectionHolder.setActive(projection)
+        wifiLock = SenderWifiLockHelper.acquireWifiLock(this)
 
         return START_NOT_STICKY
     }
@@ -106,6 +108,10 @@ class MirrorService : Service() {
     private fun teardown() {
         consentFlow.onStop()
         ProjectionHolder.setStopped()
+        try {
+            wifiLock?.release()
+        } catch (_: Exception) {}
+        wifiLock = null
         try {
             mediaProjection?.stop()
         } catch (_: Exception) {}

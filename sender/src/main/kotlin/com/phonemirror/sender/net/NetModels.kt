@@ -21,6 +21,22 @@ sealed class ClientState {
 interface OverflowPolicy {
     fun shouldAcceptFrame(frame: Frame, currentQueueBytes: Long, capacityBytes: Long): Boolean
     fun onCongestion()
+
+    fun handleEnqueue(
+        frame: Frame,
+        queue: java.util.ArrayDeque<Frame>,
+        currentQueueBytes: java.util.concurrent.atomic.AtomicLong,
+        capacityBytes: Long
+    ): Boolean {
+        val current = currentQueueBytes.get()
+        if (!shouldAcceptFrame(frame, current, capacityBytes)) {
+            onCongestion()
+            return false
+        }
+        currentQueueBytes.addAndGet(frame.body.size.toLong())
+        queue.addLast(frame)
+        return true
+    }
 }
 
 class DropOldestAudioOverflowPolicy : OverflowPolicy {

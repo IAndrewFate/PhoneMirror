@@ -141,6 +141,16 @@ class MainViewModel(
                 }
             }
         }
+
+        (streamClient.overflowPolicy as? com.phonemirror.sender.net.RealOverflowPolicy)?.let { policy ->
+            policy.onAbrStepDown = { onAbrStepDown() }
+            policy.onAbrRecovery = { onAbrRecovery() }
+            policy.onBitrateChanged = { newBitrate ->
+                val mbps = newBitrate / 1_000_000
+                settingsRepository.updateBitrate(mbps)
+                videoPipeline?.updateBitrate(newBitrate)
+            }
+        }
     }
 
     fun connect(host: String, port: Int, pin: String, name: String) {
@@ -178,6 +188,10 @@ class MainViewModel(
 
         val vPipe = videoPipelineFactory(streamClient, videoSettings)
         videoPipeline = vPipe
+        (streamClient.overflowPolicy as? com.phonemirror.sender.net.RealOverflowPolicy)?.let { policy ->
+            policy.configuredBitrateBps = currentSettings.bitrateMbps * 1_000_000
+            policy.onRequestKeyframe = { videoPipeline?.requestKeyframe() }
+        }
         vPipe.start(scope, 1080, 1920, 400)
 
         if (currentSettings.audioEnabled) {
@@ -217,7 +231,10 @@ class MainViewModel(
         val videoSent = stats.elapsedSeconds * 60
         val endBitrate = settings.value.bitrateMbps
 
-        val summary = "duration=$duration, videoFramesSent=$videoSent, videoFramesDropped=${stats.overflowDroppedCount}, audioPacketsSent=0, audioPacketsDropped=0, reconnects=${stats.reconnectAttempt}, bitrateHistory=${startBitrateMbps}Mbps->${endBitrate}Mbps, encoderRecreates=${stats.encoderRecreates}"
+        val realPolicy = streamClient.overflowPolicy as? com.phonemirror.sender.net.RealOverflowPolicy
+        val vDropped = maxOf(realPolicy?.droppedVideoCount ?: 0L, stats.overflowDroppedCount)
+        val aDropped = realPolicy?.droppedAudioCount ?: 0L
+        val summary = "duration=$duration, videoFramesSent=$videoSent, videoFramesDropped=$vDropped, audioPacketsSent=0, audioPacketsDropped=$aDropped, reconnects=${stats.reconnectAttempt}, bitrateHistory=${startBitrateMbps}Mbps->${endBitrate}Mbps, encoderRecreates=${stats.encoderRecreates}"
         logcatSessionLogger(summary)
 
         streamClient.stop()
@@ -289,13 +306,23 @@ class MainViewModel(
         val videoKbps = (bytesSentDelta * 8) / 1000L
         val audioKbps = (audioBytesDelta * 8) / 1000L
 
+        val realPolicy = streamClient.overflowPolicy as? com.phonemirror.sender.net.RealOverflowPolicy
+        val totalDropped = if (realPolicy != null) {
+            realPolicy.droppedVideoCount + realPolicy.droppedAudioCount
+        } else {
+            _sessionStats.value.overflowDroppedCount
+        }
+        val abrCount = realPolicy?.abrStepDownCount ?: _sessionStats.value.abrStepDownCount
+
         _sessionStats.value = _sessionStats.value.copy(
             elapsedSeconds = elapsed,
             videoFps = newFps,
             videoKbps = videoKbps,
             audioKbps = audioKbps,
             rttMs = streamClient.rttMs.value,
-            gen = streamClient.sessionPolicy.gen
+            gen = streamClient.sessionPolicy.gen,
+            overflowDroppedCount = totalDropped,
+            abrStepDownCount = abrCount
         )
     }
 

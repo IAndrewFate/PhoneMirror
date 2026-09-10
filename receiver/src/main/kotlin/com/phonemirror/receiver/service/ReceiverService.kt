@@ -24,6 +24,7 @@ import com.phonemirror.receiver.decode.VideoDecodePipeline
 import com.phonemirror.receiver.server.DefaultPinProvider
 import com.phonemirror.receiver.server.InMemoryPairingStore
 import com.phonemirror.receiver.server.MirrorServer
+import com.phonemirror.receiver.sync.AdaptiveJitterDetector
 import com.phonemirror.receiver.sync.AvSyncEngine
 import com.phonemirror.receiver.ui.PlaybackActivity
 import kotlinx.coroutines.CoroutineScope
@@ -78,7 +79,11 @@ class ReceiverService : Service() {
         super.onCreate()
         createNotificationChannel()
 
-        val syncEngine = AvSyncEngine(audioEnabled = true)
+        val jitterDetector = AdaptiveJitterDetector()
+        val syncEngine = AvSyncEngine(
+            audioEnabled = true,
+            adaptiveJitterDelayUsProvider = { jitterDetector.currentDelayUs }
+        )
         avSyncEngine = syncEngine
 
         val sessionPolicy = SessionPolicy(Role.RECEIVER)
@@ -87,6 +92,9 @@ class ReceiverService : Service() {
             avSync = syncEngine,
             onRequestKeyframe = {
                 mirrorServer.activeDispatcher?.sendControl(ControlMessage.RequestKeyframe())
+            },
+            onFrameArrival = {
+                jitterDetector.onFrameArrival()
             }
         )
         vPipeline.start(scope)
