@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+captures/
+.cxx/
+.omo/
+.zcode/
+.codegraph/
+keystore/
+keystore.properties
