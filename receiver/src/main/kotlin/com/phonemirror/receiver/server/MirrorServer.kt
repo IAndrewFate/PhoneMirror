@@ -31,7 +31,8 @@ class MirrorServer(
     private var serverSocket: ServerSocket? = null
     private val isRunning = AtomicBoolean(false)
     private val hasActiveClient = AtomicBoolean(false)
-    private var activeDispatcher: StreamDispatcher? = null
+    var activeDispatcher: StreamDispatcher? = null
+        private set
 
     fun bind(startPort: Int = Defaults.BASE_PORT, maxPort: Int = Defaults.MAX_PORT): Int {
         for (port in startPort..maxPort) {
@@ -119,6 +120,14 @@ class MirrorServer(
             }
         }
     }
+
+    fun sendStop() {
+        activeDispatcher?.sendControl(ControlMessage.Stop())
+        activeDispatcher?.stop()
+    }
+
+    fun isServerRunning(): Boolean = isRunning.get()
+    fun hasActiveClient(): Boolean = hasActiveClient.get()
 
     fun stop() {
         isRunning.set(false)

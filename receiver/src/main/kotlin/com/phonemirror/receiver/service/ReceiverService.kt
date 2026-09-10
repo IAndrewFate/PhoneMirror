@@ -16,9 +16,16 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.phonemirror.protocol.control.ControlMessage
+import com.phonemirror.protocol.session.Role
+import com.phonemirror.protocol.session.SessionPolicy
+import com.phonemirror.receiver.decode.AudioDecodePipeline
+import com.phonemirror.receiver.decode.VideoDecodePipeline
 import com.phonemirror.receiver.server.DefaultPinProvider
 import com.phonemirror.receiver.server.InMemoryPairingStore
 import com.phonemirror.receiver.server.MirrorServer
+import com.phonemirror.receiver.sync.AvSyncEngine
+import com.phonemirror.receiver.ui.PlaybackActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,7 +39,8 @@ data class ReceiverUiState(
     val pin: String = "",
     val isStreaming: Boolean = false,
     val pairedCount: Int = 0,
-    val connectedDevice: String? = null
+    val connectedDevice: String? = null,
+    val serverRunning: Boolean = true
 )
 
 class ReceiverService : Service() {
@@ -44,6 +52,13 @@ class ReceiverService : Service() {
     val pairingStore = InMemoryPairingStore()
 
     lateinit var mirrorServer: MirrorServer
+        private set
+
+    var videoPipeline: VideoDecodePipeline? = null
+        private set
+    var audioPipeline: AudioDecodePipeline? = null
+        private set
+    var avSyncEngine: AvSyncEngine? = null
         private set
 
     private var nsdManager: NsdManager? = null
@@ -63,9 +78,32 @@ class ReceiverService : Service() {
         super.onCreate()
         createNotificationChannel()
 
+        val syncEngine = AvSyncEngine(audioEnabled = true)
+        avSyncEngine = syncEngine
+
+        val sessionPolicy = SessionPolicy(Role.RECEIVER)
+        val vPipeline = VideoDecodePipeline(
+            sessionPolicy = sessionPolicy,
+            avSync = syncEngine,
+            onRequestKeyframe = {
+                mirrorServer.activeDispatcher?.sendControl(ControlMessage.RequestKeyframe())
+            }
+        )
+        vPipeline.start(scope)
+        videoPipeline = vPipeline
+
+        val aPipeline = AudioDecodePipeline(
+            sessionPolicy = sessionPolicy,
+            avSync = syncEngine,
+            scope = scope
+        )
+        audioPipeline = aPipeline
+
         mirrorServer = MirrorServer(
             pinProvider = pinProvider,
             pairingStore = pairingStore,
+            videoSink = vPipeline,
+            audioSink = aPipeline,
             onStreamingChanged = { streaming, deviceName ->
                 _uiState.value = _uiState.value.copy(
                     isStreaming = streaming,
@@ -73,21 +111,27 @@ class ReceiverService : Service() {
                     pairedCount = pairingStore.pairedCount
                 )
                 updateNotification(streaming, deviceName)
+
+                if (streaming) {
+                    ReceiverSessionHolder.activeService = this@ReceiverService
+                    ReceiverSessionHolder.activeServer = mirrorServer
+                    ReceiverSessionHolder.activeDispatcher = mirrorServer.activeDispatcher
+                    ReceiverSessionHolder.videoPipeline = videoPipeline
+                    ReceiverSessionHolder.audioPipeline = audioPipeline
+                    ReceiverSessionHolder.avSyncEngine = avSyncEngine
+
+                    val intent = Intent(this@ReceiverService, PlaybackActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    startActivity(intent)
+                } else {
+                    ReceiverSessionHolder.activeDispatcher = null
+                    ReceiverSessionHolder.videoPipeline?.setSurface(null)
+                }
             }
         )
 
-        try {
-            val port = mirrorServer.bind()
-            _uiState.value = _uiState.value.copy(
-                boundPort = port,
-                pin = pinProvider.current,
-                pairedCount = pairingStore.pairedCount
-            )
-            mirrorServer.start(scope)
-            registerNsd(port)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        startServer()
 
         val notification = buildNotification(false, null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -100,6 +144,39 @@ class ReceiverService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
+
+    fun startServer() {
+        try {
+            val port = mirrorServer.bind()
+            _uiState.value = _uiState.value.copy(
+                boundPort = port,
+                pin = pinProvider.current,
+                pairedCount = pairingStore.pairedCount,
+                serverRunning = true
+            )
+            mirrorServer.start(scope)
+            registerNsd(port)
+            updateNotification(false, null)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun stopServer() {
+        unregisterNsd()
+        mirrorServer.stop()
+        _uiState.value = _uiState.value.copy(
+            boundPort = 0,
+            isStreaming = false,
+            connectedDevice = null,
+            serverRunning = false
+        )
+        updateNotification(false, null)
+    }
+
+    fun sendStop() {
+        mirrorServer.sendStop()
     }
 
     private fun registerNsd(port: Int) {
@@ -163,8 +240,10 @@ class ReceiverService : Service() {
     private fun buildNotification(isStreaming: Boolean, device: String?): Notification {
         val contentText = if (isStreaming) {
             "Streaming from ${device ?: "device"}"
-        } else {
+        } else if (_uiState.value.serverRunning) {
             "Waiting for phone connection (Port ${_uiState.value.boundPort}, PIN ${_uiState.value.pin})"
+        } else {
+            "Server stopped"
         }
 
         val stopIntent = Intent(this, ReceiverService::class.java).apply {
@@ -215,6 +294,7 @@ class ReceiverService : Service() {
         super.onDestroy()
         unregisterNsd()
         mirrorServer.stop()
+        ReceiverSessionHolder.clear()
         scope.cancel()
     }
 
