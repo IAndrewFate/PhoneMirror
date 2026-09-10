@@ -232,4 +232,8 @@ class StreamClient(
             }
         }
     }
+
+    fun notifyState(newState: ClientState) {
+        _state.value = newState
+    }
 }
