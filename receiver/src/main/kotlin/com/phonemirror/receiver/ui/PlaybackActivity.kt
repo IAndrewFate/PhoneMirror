@@ -7,6 +7,7 @@ import android.view.*
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.phonemirror.protocol.control.ControlMessage
 import com.phonemirror.receiver.decode.LetterboxCalculator
 import com.phonemirror.receiver.decode.VideoDecodeState
 import com.phonemirror.receiver.service.ReceiverSessionHolder
@@ -21,6 +22,7 @@ class PlaybackActivity : Activity() {
     private lateinit var container: FrameLayout
     private lateinit var surfaceView: SurfaceView
     private lateinit var overlayView: TextView
+    private lateinit var waitingView: TextView
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var statsJob: Job? = null
@@ -96,6 +98,24 @@ class PlaybackActivity : Activity() {
             )
         )
 
+        // Waiting message displayed while awaiting first video frame
+        waitingView = TextView(this).apply {
+            text = "PhoneMirror TV\n\nОжидание видеопотока с телефона..."
+            textSize = 22f
+            setTextColor(0xFFB0BEC5.toInt())
+            gravity = Gravity.CENTER
+            setPadding(48, 48, 48, 48)
+            visibility = View.VISIBLE
+        }
+        container.addView(
+            waitingView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+        )
+
         // Overlay is stacked ABOVE the SurfaceView in the window UI layer
         overlayView = TextView(this).apply {
             textSize = 16f
@@ -140,9 +160,19 @@ class PlaybackActivity : Activity() {
         if (pipeline != null) {
             stateJob = activityScope.launch {
                 pipeline.state.collect { state ->
-                    if (state is VideoDecodeState.Error) {
-                        Toast.makeText(this@PlaybackActivity, "Decode error: ${state.message}", Toast.LENGTH_LONG).show()
-                        finish()
+                    when (state) {
+                        is VideoDecodeState.Decoding -> {
+                            waitingView.visibility = View.GONE
+                            if (container.width > 0 && container.height > 0) {
+                                updateSurfaceLayout(container.width, container.height)
+                            }
+                        }
+                        is VideoDecodeState.Error -> {
+                            waitingView.text = "Ошибка декодирования видео:\n${state.message}\n\nОжидание ключевого кадра..."
+                            waitingView.visibility = View.VISIBLE
+                            ReceiverSessionHolder.activeDispatcher?.sendControl(ControlMessage.RequestKeyframe())
+                        }
+                        else -> {}
                     }
                 }
             }
@@ -151,6 +181,11 @@ class PlaybackActivity : Activity() {
         statsJob = activityScope.launch {
             while (isActive) {
                 delay(500)
+                if ((ReceiverSessionHolder.videoPipeline?.renderedFrameCount ?: 0L) > 0) {
+                    if (waitingView.visibility == View.VISIBLE && pipeline?.state?.value !is VideoDecodeState.Error) {
+                        waitingView.visibility = View.GONE
+                    }
+                }
                 if (playbackController.isOverlayVisible) {
                     updateOverlay()
                 }

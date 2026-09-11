@@ -20,7 +20,9 @@ data class NalUnit(
 
 data class SpsPpsConfig(
     val sps: ByteArray?,
-    val pps: ByteArray?
+    val pps: ByteArray?,
+    val width: Int = 0,
+    val height: Int = 0
 )
 
 object AnnexBParser {
@@ -107,6 +109,164 @@ object AnnexBParser {
             }
         }
 
-        return SpsPpsConfig(sps = sps, pps = pps)
+        var spsWidth = 0
+        var spsHeight = 0
+        sps?.let {
+            parseSpsDimensions(it)?.let { (w, h) ->
+                spsWidth = w
+                spsHeight = h
+            }
+        }
+
+        return SpsPpsConfig(sps = sps, pps = pps, width = spsWidth, height = spsHeight)
+    }
+
+    /**
+     * Parses width and height from an H.264 SPS NAL unit (accounting for macroblocks and crop).
+     */
+    fun parseSpsDimensions(spsBytes: ByteArray): Pair<Int, Int>? {
+        try {
+            var offset = 0
+            if (spsBytes.size >= 4 && spsBytes[0] == 0.toByte() && spsBytes[1] == 0.toByte() && spsBytes[2] == 0.toByte() && spsBytes[3] == 1.toByte()) {
+                offset = 4
+            } else if (spsBytes.size >= 3 && spsBytes[0] == 0.toByte() && spsBytes[1] == 0.toByte() && spsBytes[2] == 1.toByte()) {
+                offset = 3
+            }
+
+            val rbsp = java.io.ByteArrayOutputStream()
+            var i = offset
+            while (i < spsBytes.size) {
+                if (i + 2 < spsBytes.size && spsBytes[i] == 0.toByte() && spsBytes[i + 1] == 0.toByte() && spsBytes[i + 2] == 3.toByte()) {
+                    rbsp.write(0)
+                    rbsp.write(0)
+                    i += 3
+                } else {
+                    rbsp.write(spsBytes[i].toInt() and 0xFF)
+                    i++
+                }
+            }
+            val data = rbsp.toByteArray()
+            if (data.isEmpty()) return null
+
+            var bitPos = 8 // Skip NAL header byte
+
+            fun readBit(): Int {
+                val byteIdx = bitPos / 8
+                val bitIdx = 7 - (bitPos % 8)
+                bitPos++
+                if (byteIdx < data.size) {
+                    return ((data[byteIdx].toInt() and 0xFF) shr bitIdx) and 1
+                }
+                return 0
+            }
+
+            fun readBits(n: Int): Int {
+                var v = 0
+                for (b in 0 until n) {
+                    v = (v shl 1) or readBit()
+                }
+                return v
+            }
+
+            fun readUe(): Int {
+                var zeros = 0
+                while (readBit() == 0 && bitPos / 8 < data.size) {
+                    zeros++
+                }
+                if (zeros == 0) return 0
+                val v = readBits(zeros)
+                return ((1 shl zeros) - 1) + v
+            }
+
+            fun readSe(): Int {
+                val ue = readUe()
+                val sign = if (ue % 2 == 0) -1 else 1
+                return sign * ((ue + 1) / 2)
+            }
+
+            val profileIdc = readBits(8)
+            readBits(8) // constraint flags
+            readBits(8) // level_idc
+            readUe() // seq_parameter_set_id
+
+            val highProfiles = setOf(100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135)
+            if (profileIdc in highProfiles) {
+                val chromaFormatIdc = readUe()
+                if (chromaFormatIdc == 3) {
+                    readBit()
+                }
+                readUe()
+                readUe()
+                readBit()
+                val seqScalingMatrixPresent = readBit()
+                if (seqScalingMatrixPresent == 1) {
+                    val count = if (chromaFormatIdc == 3) 12 else 8
+                    for (c in 0 until count) {
+                        val seqScalingListPresent = readBit()
+                        if (seqScalingListPresent == 1) {
+                            val sizeOfScalingList = if (c < 6) 16 else 64
+                            var lastScale = 8
+                            var nextScale = 8
+                            for (j in 0 until sizeOfScalingList) {
+                                if (nextScale != 0) {
+                                    val deltaScale = readSe()
+                                    nextScale = (lastScale + deltaScale + 256) % 256
+                                }
+                                lastScale = if (nextScale == 0) lastScale else nextScale
+                            }
+                        }
+                    }
+                }
+            }
+
+            readUe() // log2_max_frame_num_minus4
+            val picOrderCntType = readUe()
+            if (picOrderCntType == 0) {
+                readUe()
+            } else if (picOrderCntType == 1) {
+                readBit()
+                readSe()
+                readSe()
+                val numRef = readUe()
+                for (c in 0 until numRef) {
+                    readSe()
+                }
+            }
+
+            readUe() // max_num_ref_frames
+            readBit() // gaps_in_frame_num_value_allowed_flag
+
+            val picWidthInMbsMinus1 = readUe()
+            val picHeightInMapUnitsMinus1 = readUe()
+            val frameMbsOnlyFlag = readBit()
+            if (frameMbsOnlyFlag == 0) {
+                readBit()
+            }
+            readBit() // direct_8x8_inference_flag
+
+            val frameCroppingFlag = readBit()
+            var cropLeft = 0
+            var cropRight = 0
+            var cropTop = 0
+            var cropBottom = 0
+            if (frameCroppingFlag == 1) {
+                cropLeft = readUe()
+                cropRight = readUe()
+                cropTop = readUe()
+                cropBottom = readUe()
+            }
+
+            val rawWidth = (picWidthInMbsMinus1 + 1) * 16
+            val rawHeight = (2 - frameMbsOnlyFlag) * (picHeightInMapUnitsMinus1 + 1) * 16
+            val width = rawWidth - (cropLeft + cropRight) * 2
+            val height = rawHeight - (cropTop + cropBottom) * 2
+
+            if (width > 0 && height > 0) {
+                return Pair(width, height)
+            }
+            return null
+        } catch (_: Throwable) {
+            return null
+        }
     }
 }

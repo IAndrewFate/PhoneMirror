@@ -94,6 +94,11 @@ class VideoCapturePipeline(
         currentHeight = targetH
         currentDpi = targetDpi
 
+        // Immediately inform receiver of the encoded dimensions
+        val resMsg = ControlMessage.ResolutionChange(targetW, targetH, targetDpi)
+        streamClient.sendFrame(Frame(FrameKind.CONTROL, encodeControl(resMsg)))
+        sessionPolicy.onEvent(SessionEvent.ResolutionChanged(targetW, targetH, targetDpi))
+
         val pState = projectionHolder.state.value
 
         val enc = encoderFactory.createEncoder()

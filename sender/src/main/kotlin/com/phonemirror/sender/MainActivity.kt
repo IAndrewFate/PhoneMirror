@@ -78,6 +78,10 @@ class MainActivity : ComponentActivity() {
             settingsRepository = settingsRepo,
             projectionHolder = ProjectionHolder,
             windowController = windowController,
+            screenMetricsProvider = {
+                val dm = resources.displayMetrics
+                ScreenMetrics(dm.widthPixels, dm.heightPixels, dm.densityDpi)
+            },
             coroutineScope = lifecycleScope
         )
         nsdDiscovery = NsdDiscovery(this)
@@ -224,18 +228,32 @@ fun MainScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            text = "PhoneMirror",
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold
-        )
+    @OptIn(ExperimentalMaterial3Api::class)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "PhoneMirror",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
 
         // STATUS CARD
         Card(
@@ -443,6 +461,7 @@ fun MainScreen(
             }
         }
     }
+}
 }
 
 fun formatClientState(state: ClientState, isStreaming: Boolean): String = when {

@@ -42,11 +42,18 @@ sealed class UiError {
     data class Revoked(val message: String = "Screen capture stopped by system") : UiError()
 }
 
+data class ScreenMetrics(
+    val width: Int,
+    val height: Int,
+    val dpi: Int
+)
+
 class MainViewModel(
     val streamClient: StreamClient = StreamClient(),
     val settingsRepository: SettingsRepository = SettingsRepository(),
     val projectionHolder: ProjectionHolder = ProjectionHolder,
     val windowController: WindowController = FakeWindowController(),
+    val screenMetricsProvider: () -> ScreenMetrics = { ScreenMetrics(1080, 1920, 400) },
     private val videoPipelineFactory: (StreamClient, VideoSettings) -> VideoCapturePipeline = { client, settings ->
         VideoCapturePipeline(
             streamClient = client,
@@ -192,7 +199,8 @@ class MainViewModel(
             policy.configuredBitrateBps = currentSettings.bitrateMbps * 1_000_000
             policy.onRequestKeyframe = { videoPipeline?.requestKeyframe() }
         }
-        vPipe.start(scope, 1080, 1920, 400)
+        val metrics = screenMetricsProvider()
+        vPipe.start(scope, metrics.width, metrics.height, metrics.dpi)
 
         if (currentSettings.audioEnabled) {
             val aPipe = audioPipelineFactory(streamClient)

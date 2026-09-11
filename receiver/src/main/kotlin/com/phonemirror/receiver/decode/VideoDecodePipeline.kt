@@ -113,6 +113,10 @@ class VideoDecodePipeline(
         val config = AnnexBParser.parseSpsPps(spsPps)
         cachedSps = config.sps
         cachedPps = config.pps
+        if (config.width > 0 && config.height > 0) {
+            currentWidth = config.width
+            currentHeight = config.height
+        }
         awaitKeyframe = true
 
         reconfigureDecoder()
@@ -152,6 +156,8 @@ class VideoDecodePipeline(
     }
 
     private fun reconfigureDecoder() {
+        val sps = cachedSps ?: return
+
         val dec = decoder ?: decoderFactory.createDecoder().also { decoder = it }
         dec.stop()
         dec.release()
@@ -168,7 +174,8 @@ class VideoDecodePipeline(
             dec.start()
             _state.value = VideoDecodeState.Decoding(currentWidth, currentHeight)
         } catch (e: Throwable) {
-            _state.value = VideoDecodeState.Error("Failed to configure video decoder: ")
+            val err = "Failed to configure video decoder: ${e.message ?: e.javaClass.simpleName}"
+            _state.value = VideoDecodeState.Error(err)
         }
     }
 

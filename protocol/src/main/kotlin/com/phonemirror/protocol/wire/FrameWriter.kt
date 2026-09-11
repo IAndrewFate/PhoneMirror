@@ -4,6 +4,7 @@ import java.io.OutputStream
 
 class FrameWriter(private val out: OutputStream) {
 
+    @Synchronized
     fun writeFrame(frame: Frame) {
         if (frame.body.size > WireConstants.MAX_FRAME_BODY_SIZE) {
             throw FrameTooLargeException("Frame body exceeds maximum allowed size: ${frame.body.size} > ${WireConstants.MAX_FRAME_BODY_SIZE}")

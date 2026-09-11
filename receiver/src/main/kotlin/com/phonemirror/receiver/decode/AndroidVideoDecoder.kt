@@ -13,7 +13,9 @@ class AndroidVideoDecoder : VideoDecoder {
         val decoder = MediaCodec.createDecoderByType("video/avc")
         codec = decoder
 
-        val mediaFormat = MediaFormat.createVideoFormat("video/avc", format.width, format.height).apply {
+        val targetSurface = if (surface != null && surface.isValid) surface else null
+
+        val primaryFormat = MediaFormat.createVideoFormat("video/avc", format.width, format.height).apply {
             format.sps?.let { setByteBuffer("csd-0", ByteBuffer.wrap(it)) }
             format.pps?.let { setByteBuffer("csd-1", ByteBuffer.wrap(it)) }
 
@@ -30,7 +32,16 @@ class AndroidVideoDecoder : VideoDecoder {
             } catch (_: Throwable) {}
         }
 
-        decoder.configure(mediaFormat, surface, null, 0)
+        try {
+            decoder.configure(primaryFormat, targetSurface, null, 0)
+        } catch (_: Throwable) {
+            // Fallback: standard format without vendor/low-latency keys
+            val fallbackFormat = MediaFormat.createVideoFormat("video/avc", format.width, format.height).apply {
+                format.sps?.let { setByteBuffer("csd-0", ByteBuffer.wrap(it)) }
+                format.pps?.let { setByteBuffer("csd-1", ByteBuffer.wrap(it)) }
+            }
+            decoder.configure(fallbackFormat, targetSurface, null, 0)
+        }
     }
 
     override fun start() {
