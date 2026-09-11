@@ -150,6 +150,7 @@ class StreamClient(
 
                 // Success!
                 endpointStore.saveEndpoint(host, port, tvName)
+                endpointStore.savePin(pin)
                 sessionPolicy.onEvent(SessionEvent.HelloOkReceived)
                 _state.value = ClientState.Connected(host, port)
                 attempt = 0 // reset reconnect attempts on successful handshake

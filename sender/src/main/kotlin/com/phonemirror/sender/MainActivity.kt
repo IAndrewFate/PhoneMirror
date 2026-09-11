@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.res.Configuration
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.phonemirror.sender.data.MirrorSettings
@@ -35,6 +37,7 @@ import com.phonemirror.sender.data.SharedPreferencesSettingsStore
 import com.phonemirror.sender.net.ClientState
 import com.phonemirror.sender.net.DiscoveredDevice
 import com.phonemirror.sender.net.NsdDiscovery
+import com.phonemirror.sender.net.SharedPreferencesEndpointStore
 import com.phonemirror.sender.net.StreamClient
 import com.phonemirror.sender.service.MirrorService
 import com.phonemirror.sender.service.MirrorTileService
@@ -72,7 +75,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         windowController = ActivityWindowController(this)
         val settingsRepo = SettingsRepository(SharedPreferencesSettingsStore(this))
-        val streamClient = StreamClient()
+        val endpointStore = SharedPreferencesEndpointStore(this)
+        val streamClient = StreamClient(endpointStore = endpointStore)
         viewModel = MainViewModel(
             streamClient = streamClient,
             settingsRepository = settingsRepo,
@@ -126,6 +130,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::viewModel.isInitialized) {
+            viewModel.onOrientationChanged()
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleQuickConnectIntent(intent)
@@ -134,7 +145,7 @@ class MainActivity : ComponentActivity() {
     private fun handleQuickConnectIntent(intent: Intent?) {
         if (intent?.getBooleanExtra(MirrorTileService.EXTRA_QUICK_CONNECT, false) == true) {
             viewModel.lastEndpoint?.let { ep ->
-                viewModel.connect(ep.host, ep.port, "", ep.name)
+                viewModel.connect(ep.host, ep.port, viewModel.lastPin, ep.name)
             }
         }
     }
@@ -157,12 +168,13 @@ fun MainScreen(
         nsdDiscovery.discover().collect { value = it }
     }
 
-    var manualIp by remember { mutableStateOf("") }
-    var manualPort by remember { mutableStateOf("47700") }
-    var pin by remember { mutableStateOf("") }
-    var selectedDeviceName by remember { mutableStateOf("Android TV") }
-
     val lastEndpoint = viewModel.lastEndpoint
+    val lastPin = viewModel.lastPin
+
+    var manualIp by rememberSaveable { mutableStateOf(lastEndpoint?.host ?: "") }
+    var manualPort by rememberSaveable { mutableStateOf(lastEndpoint?.port?.toString() ?: "47700") }
+    var pin by rememberSaveable { mutableStateOf(lastPin) }
+    var selectedDeviceName by rememberSaveable { mutableStateOf(lastEndpoint?.name ?: "Android TV") }
 
     LaunchedEffect(lastEndpoint) {
         lastEndpoint?.let {
@@ -170,6 +182,9 @@ fun MainScreen(
                 manualIp = it.host
                 manualPort = it.port.toString()
                 selectedDeviceName = it.name
+                if (pin.isEmpty() && lastPin.isNotEmpty()) {
+                    pin = lastPin
+                }
             }
         }
     }

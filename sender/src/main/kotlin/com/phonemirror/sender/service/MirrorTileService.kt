@@ -13,11 +13,19 @@ import com.phonemirror.sender.net.ClientState
 import com.phonemirror.sender.net.DiscoveredDevice
 import com.phonemirror.sender.net.EndpointStore
 import com.phonemirror.sender.net.InMemoryEndpointStore
+import com.phonemirror.sender.net.SharedPreferencesEndpointStore
 
 @RequiresApi(Build.VERSION_CODES.N)
 class MirrorTileService : TileService() {
 
     var endpointStore: EndpointStore = InMemoryEndpointStore()
+
+    override fun onCreate() {
+        super.onCreate()
+        if (endpointStore is InMemoryEndpointStore) {
+            endpointStore = SharedPreferencesEndpointStore(this)
+        }
+    }
 
     override fun onStartListening() {
         super.onStartListening()

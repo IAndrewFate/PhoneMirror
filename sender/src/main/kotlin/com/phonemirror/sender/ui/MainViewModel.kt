@@ -106,6 +106,14 @@ class MainViewModel(
     val lastEndpoint: DiscoveredDevice?
         get() = streamClient.endpointStore.loadEndpoint()
 
+    val lastPin: String
+        get() = streamClient.endpointStore.loadPin()
+
+    fun onOrientationChanged() {
+        val metrics = screenMetricsProvider()
+        videoPipeline?.onDisplayChanged(metrics.width, metrics.height, metrics.dpi)
+    }
+
     init {
         clientCollectorJob = scope.launch {
             streamClient.state.collect { state ->
