@@ -103,7 +103,7 @@ class ReceiverService : Service() {
         val aPipeline = AudioDecodePipeline(
             sessionPolicy = sessionPolicy,
             avSync = syncEngine,
-            scope = scope
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         )
         audioPipeline = aPipeline
 

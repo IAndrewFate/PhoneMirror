@@ -97,14 +97,18 @@ class StreamDispatcher(
                         }
                         FrameKind.AUDIO_CONFIG -> {
                             sessionPolicy.onEvent(SessionEvent.AudioConfigReceived)
-                            audioSink.onConfig(frame.body)
+                            try {
+                                audioSink.onConfig(frame.body)
+                            } catch (_: Throwable) {}
                         }
                         FrameKind.AUDIO_FRAME -> {
-                            val body = AudioFrameBody.decode(frame.body)
-                            sessionPolicy.onEvent(
-                                SessionEvent.FrameReceived(FrameKind.AUDIO_FRAME, false)
-                            )
-                            audioSink.onFrame(body.ptsUs, body.packet)
+                            try {
+                                val body = AudioFrameBody.decode(frame.body)
+                                sessionPolicy.onEvent(
+                                    SessionEvent.FrameReceived(FrameKind.AUDIO_FRAME, false)
+                                )
+                                audioSink.onFrame(body.ptsUs, body.packet)
+                            } catch (_: Throwable) {}
                         }
                     }
                 }

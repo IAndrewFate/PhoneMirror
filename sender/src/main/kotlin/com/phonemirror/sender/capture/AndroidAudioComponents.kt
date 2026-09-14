@@ -85,27 +85,18 @@ class AndroidAudioCaptureSource(
 }
 
 class AndroidAudioEncoder : AudioEncoder {
-    override var codecName: String = "opus"
+    override var codecName: String = "mp4a-latm"
         private set
 
     private var codec: MediaCodec? = null
     private val csdList = mutableListOf<ByteArray>()
 
     override fun configure(sampleRate: Int, channels: Int, bitrate: Int) {
-        // Try Opus first, fallback to AAC-LC if unsupported
+        // Try AAC-LC first (mandatory on all Android TVs & mobile devices), fallback to Opus
         var mediaCodec: MediaCodec? = null
-        var chosenCodec = "opus"
+        var chosenCodec = "mp4a-latm"
 
         try {
-            mediaCodec = MediaCodec.createEncoderByType("audio/opus")
-            val format = MediaFormat.createAudioFormat("audio/opus", sampleRate, channels).apply {
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-            }
-            mediaCodec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            chosenCodec = "opus"
-        } catch (_: Throwable) {
-            try { mediaCodec?.release() } catch (_: Throwable) {}
-            // Fallback to AAC-LC
             mediaCodec = MediaCodec.createEncoderByType("audio/mp4a-latm")
             val aacFormat = MediaFormat.createAudioFormat("audio/mp4a-latm", sampleRate, channels).apply {
                 setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
@@ -113,6 +104,21 @@ class AndroidAudioEncoder : AudioEncoder {
             }
             mediaCodec.configure(aacFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             chosenCodec = "mp4a-latm"
+        } catch (_: Throwable) {
+            try { mediaCodec?.release() } catch (_: Throwable) {}
+            // Fallback to Opus
+            try {
+                mediaCodec = MediaCodec.createEncoderByType("audio/opus")
+                val format = MediaFormat.createAudioFormat("audio/opus", sampleRate, channels).apply {
+                    setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                }
+                mediaCodec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                chosenCodec = "opus"
+            } catch (t: Throwable) {
+                codec = null
+                codecName = "none"
+                throw t
+            }
         }
 
         codec = mediaCodec
@@ -197,8 +203,8 @@ class AndroidAudioEncoder : AudioEncoder {
 
     private fun extractCsdFromFormat(format: MediaFormat) {
         var i = 0
-        while (format.containsKey("csd-")) {
-            val csdBuf = format.getByteBuffer("csd-")
+        while (format.containsKey("csd-$i")) {
+            val csdBuf = format.getByteBuffer("csd-$i")
             if (csdBuf != null) {
                 val bytes = ByteArray(csdBuf.remaining())
                 csdBuf.get(bytes)
@@ -212,6 +218,9 @@ class AndroidAudioEncoder : AudioEncoder {
             csdList.add(OpusCsdBuilder.buildOpusHead())
             csdList.add(OpusCsdBuilder.buildCodecDelay())
             csdList.add(OpusCsdBuilder.buildSeekPreRoll())
+        } else if (codecName == "mp4a-latm" && csdList.isEmpty()) {
+            // 48000Hz stereo AAC-LC = 0x11, 0x90
+            csdList.add(byteArrayOf(0x11, 0x90.toByte()))
         }
     }
 }

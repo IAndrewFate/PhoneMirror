@@ -179,7 +179,7 @@ class AudioCapturePipeline(
                 Base64.getEncoder().encodeToString(OpusCsdBuilder.buildSeekPreRoll())
             )
         } else {
-            emptyList()
+            listOf(Base64.getEncoder().encodeToString(byteArrayOf(0x11, 0x90.toByte())))
         }
 
         val payload = AudioConfigPayload(

@@ -52,7 +52,7 @@ class AudioDecodePipeline(
             val mime = when (payload.codec.lowercase()) {
                 "opus", "audio/opus" -> "audio/opus"
                 "mp4a-latm", "audio/mp4a-latm", "aac" -> "audio/mp4a-latm"
-                else -> "audio/opus"
+                else -> "audio/mp4a-latm"
             }
 
             val csdBuffers = mutableListOf<ByteArray>()
@@ -66,11 +66,11 @@ class AudioDecodePipeline(
                     csdBuffers.add(buildDefaultOpusHead(payload.sampleRate, payload.channels))
                 }
                 if (csdBuffers.size < 2) {
-                    val delayBuf = ByteBuffer.allocate(8).order(ByteOrder.nativeOrder()).putLong(6_500_000L).array()
+                    val delayBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(6_500_000L).array()
                     csdBuffers.add(delayBuf)
                 }
                 if (csdBuffers.size < 3) {
-                    val seekBuf = ByteBuffer.allocate(8).order(ByteOrder.nativeOrder()).putLong(80_000_000L).array()
+                    val seekBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(80_000_000L).array()
                     csdBuffers.add(seekBuf)
                 }
             } else {
@@ -102,7 +102,7 @@ class AudioDecodePipeline(
             avSync.notifyAudioConfig(payload.sampleRate)
             _state.value = AudioDecodeState.Running(payload.codec, payload.sampleRate, payload.channels)
             startPump()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             val msg = "Audio decode configure failed: " + (e.message ?: "unknown")
             _state.value = AudioDecodeState.Error(msg)
             avSync.onAudioError(msg)
@@ -110,31 +110,50 @@ class AudioDecodePipeline(
     }
 
     override fun onFrame(ptsUs: Long, packet: ByteArray) {
-        avSync.onAudioFrame(ptsUs)
-        val dec = decoder ?: return
-        dec.queueInput(packet, ptsUs)
+        try {
+            avSync.onAudioFrame(ptsUs)
+            val dec = decoder ?: return
+            dec.queueInput(packet, ptsUs)
+        } catch (_: Throwable) {}
     }
 
     fun pumpOnce(): Boolean {
         val dec = decoder ?: return false
-        val output = dec.dequeueOutput(0L) ?: return false
+        val output = try {
+            dec.dequeueOutput(0L)
+        } catch (_: Throwable) {
+            null
+        } ?: return false
+
         return when (output) {
             is AudioDecoderOutput.Pcm -> {
-                val p = player ?: playerFactory().also { player = it }
-                if (!isPlaying) {
-                    p.play()
-                    isPlaying = true
+                val p = player ?: try {
+                    playerFactory().also { player = it }
+                } catch (_: Throwable) {
+                    null
                 }
-                if (output.pcm.isNotEmpty()) {
-                    p.write(output.pcm, 0, output.pcm.size)
+                if (p != null) {
+                    if (!isPlaying) {
+                        try {
+                            p.play()
+                            isPlaying = true
+                        } catch (_: Throwable) {}
+                    }
+                    if (output.pcm.isNotEmpty()) {
+                        try {
+                            p.write(output.pcm, 0, output.pcm.size)
+                        } catch (_: Throwable) {}
+                    }
+                    val underruns = try { p.underrunCount.toLong() } catch (_: Throwable) { 0L }
+                    if (underruns > audioUnderruns) {
+                        audioUnderruns = underruns
+                        avSync.updateAudioUnderruns(audioUnderruns)
+                    }
                 }
-                dec.releaseOutputBuffer(output.bufferIndex)
+                try {
+                    dec.releaseOutputBuffer(output.bufferIndex)
+                } catch (_: Throwable) {}
                 decodedFrameCount++
-                val underruns = p.underrunCount.toLong()
-                if (underruns > audioUnderruns) {
-                    audioUnderruns = underruns
-                    avSync.updateAudioUnderruns(audioUnderruns)
-                }
                 true
             }
             is AudioDecoderOutput.TryAgainLater -> false
@@ -149,9 +168,13 @@ class AudioDecodePipeline(
 
     private fun startPump() {
         if (isRunning.compareAndSet(false, true)) {
-            pumpJob = scope.launch {
+            pumpJob = scope.launch(Dispatchers.IO) {
                 while (isActive && isRunning.get()) {
-                    val didWork = pumpOnce()
+                    val didWork = try {
+                        pumpOnce()
+                    } catch (_: Throwable) {
+                        false
+                    }
                     if (!didWork) {
                         delay(5)
                     }
